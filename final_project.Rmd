@@ -1,0 +1,996 @@
+---
+output:
+  pdf_document:
+    latex_engine: xelatex
+    extra_dependencies: kotex
+  html_document:
+    df_print: paged
+monofont: Malgun Gothic
+mainfont: Malgun Gothic
+header-includes:
+- \usepackage{xeCJK}
+- \setCJKmainfont{Malgun Gothic}
+editor_options:
+  markdown:
+    wrap: 72
+---
+
+\begin{titlepage}
+\centering
+\vspace*{2cm}
+
+{\LARGE \textbf{[Multivariate Analysis 최종 보고서]}}
+
+\vspace{0.5cm}
+\rule{0.8\textwidth}{0.5pt}
+\vspace{1cm}
+
+{\huge \textbf{기상 조건이 강원도 화재 발생 및 피해 규모에 미치는 영향 분석}}
+
+\vspace{0.3cm}
+
+{\Large : PCA 기반 포아송 GLM과 상호작용 MLR을 이용한 빈도·심도 통합 모델링}
+
+\vspace{4cm}
+
+{\large \textbf{과목명:} Multivariate Analysis (IMEN 415)}
+
+\vspace{0.2cm}
+{\large \textbf{제출일:} 2026년 6월 10일}
+
+\vspace{0.5cm}
+{\large \textbf{작성자:}}
+
+\vspace{0.2cm}
+{\large 2021170814 류근호 (산업경영공학부)}
+
+{\large 2022340019 이용준 (심리학과 / 산업경영공학부)}
+
+{\large 2020170857 이준혁 (산업경영공학부)}
+
+\vspace{1cm}
+\rule{0.8\textwidth}{0.5pt}
+
+\vspace{0.5cm}
+{\Large 고려대학교 / 산업경영공학부}
+
+\end{titlepage}
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE,
+                      fig.width = 6.5, fig.height = 4, fig.align = "center",
+                      dev = "ragg_png")
+library(dplyr)
+library(readr)
+library(stringr)
+library(lubridate)
+library(zoo)
+library(ggplot2)
+library(patchwork)
+theme_set(theme_bw(base_family = "Malgun Gothic"))
+```
+
+# 1. Introduction
+
+## 1.1 연구 배경 및 동기
+
+강원도는 태백산맥을 경계로 영동과 영서 지역으로 나뉘며, 각기 다른 기후
+특성을 가진다. 특히 봄철에는 태백산맥을 넘어 영동 지방으로 불어오는 고온
+건조한 바람인 **양간지풍(일명 푄 현상)**이 발생하여 화재 위험을 높이는
+것으로 알려져 있다(기상청 강원지방기상청, 한국 지역별 기후특성).
+실제로 2019년 4월 고성·속초 산불은 약 2,000ha의 산림을 소실시키고 2명이
+사망하였으며(행정안전부, 2019), 2022년 3월 울진·삼척 산불은 약
+16,302ha의 산림 피해를 입혀 특별재난지역으로 선포되었다(산림청, 2022).
+이러한 대형 화재들은 강한 바람과 건조한 기상 조건이 복합적으로 작용한
+결과로 분석된다.
+
+기후변화로 인해 강수 패턴과 기온이 변화하면서 화재 발생 시기와 규모 또한
+변화하고 있다는 우려가 제기되고 있다. 따라서 기상 조건과 화재 발생 간의
+통계적 관계를 규명하고, 지역별 특성을 고려한 분석이 필요하다.
+
+## 1.2 연구 목적 및 질문
+
+본 연구는 2015년부터 2024년까지 10년간의 강원도 화재 데이터와 기상 관측
+데이터를 결합하여, 기상 조건이 화재 **발생 빈도(frequency)**와 **피해
+규모(severity)**에 미치는 영향을 통계적으로 분석하는 것을 목적으로 한다.
+구체적인 연구 질문은 다음과 같다.
+
+1.  기상 변수들의 복합적 요인(주성분)과 계절은 화재 발생 빈도에 유의한
+    영향을 미치는가?
+2.  영동과 영서 지역 간에 풍속이 화재 피해 규모에 미치는 영향은 다른가?
+    즉, 양간지풍에 해당하는 지형–풍속 간 상호작용 효과가 존재하는가?
+
+## 1.3 데이터 소개
+
+본 연구에서는 두 가지 공공 데이터를 활용하였다.
+
+**화재 데이터**는 소방청 공공데이터포털(국가화재정보시스템)에서 제공하는
+화재 발생 정보로, 2015년부터 2024년까지 강원도 18개 시군구에서 발생한
+화재 기록을 포함한다. 각 화재 건에 대한 발생 일시, 시도·시군구, 인명피해
+소계, 재산피해 소계 정보를 담고 있다. 본 연구에서 '화재'는 소방청이
+집계하는 모든 유형(건축물, 임야, 자동차, 기타)을 포함하며, 서론에서
+사례로 언급한 '산불'은 임야 화재의 일부에 해당한다.
+
+**기상 데이터**는 기상청 기상자료개방포털에서 제공하는
+종관기상관측(ASOS) 일자료로, 강원도 내 관측소의 기온(평균·최저·최고),
+강수량, 풍속(평균·최대), 습도(평균·최소) 등을 포함한다. 이 가운데 분석에
+직접 투입한 연속형 변수는 평균기온·평균습도·최대풍속이며, 여기에
+일교차(기온교차 = 최고기온 - 최저기온)와 건조지수(기온·습도 기반 파생
+변수)를 추가로 생성하여 총 5개 변수를 주성분 분석에 사용하였다(자세한
+내용은 2.1절 참조).
+
+두 데이터는 동일한 기간(2015\~2024)과 지역(강원도)을 대상으로 하며, 각각
+공신력 있는 공공기관에서 수집된 자료로 신뢰성이 확보된다.
+
+## 1.4 분석 방법 개요
+
+본 연구는 다음 절차를 따른다. 먼저 두 이종(heterogeneous) 데이터를
+'날짜–시군구' 단위로 결합하여 시공간 패널 데이터를 구축한다. 이후 두
+가지 통계 분석을 수행한다.
+
+가설 1에서는 기상 변수 간 다중공선성을 완화하기 위해 **주성분
+분석(PCA)**으로 기상 패턴을 소수의 독립적 지수로 축약하고, 화재 발생
+**건수**라는 카운트 자료의 특성을 반영하여 **일반화 선형 모델(GLM)** 중
+포아송 회귀를 적합한다. 이 과정에서 수업에서 다룬 로지스틱 회귀를 우선
+검토한 뒤 그 한계를 보완하는 방향으로 모델을 발전시킨다. 가설 2에서는
+**다중선형회귀(MLR)**에 풍속과 지역(영동/영서)의 **상호작용 항**을
+추가하여, 지형에 따라 풍속의 효과가 달라지는지를 검정한다.
+
+## 1.5 본 연구의 기여 (Our Contributions)
+
+산불과 기상에 관한 기존 연구는 개별 기상 변수와 화재 간 단순 상관관계를
+보거나 기상학적 메커니즘을 규명하는 데 집중한 경우가 많았다. 본 연구는
+다음 네 가지 측면에서 차별성을 가진다. 첫째, 10년 치 자료를
+'날짜–시군구' 단위로 정합시켜 단면 분석이 아닌 시공간 패널 데이터를
+구축하였다. 둘째, 기상 변수 간 다중공선성을 주성분 분석(PCA)으로
+완화하고 해석 가능한 기상 지수를 도출하였다. 셋째, 화재 발생 '여부(0/1)'
+대신 '건수'를 종속변수로 하는 포아송 GLM을 채택하여 다발성 위험을
+모델링하였다. 넷째, Cook's Distance로 기상과 무관한 극단 피해를 정제한
+뒤 상호작용 회귀로 지형 효과를 검정하였다. 각 기여의 구체적 근거는 해당
+가설의 분석 절에서 다시 설명한다.
+
+------------------------------------------------------------------------
+
+# 2. Analysis
+
+## 2.1 데이터 전처리 요약
+
+분석에 사용할 자료는 '날짜(Date)–시군구(Location)'를 공통 키로 하는
+**시공간 패널 데이터**로 구축하였다. 전처리는 크게 (i) 인코딩 처리 및
+변수 표준화, (ii) 이종 데이터 결합, (iii) 결측·이상치 정제, (iv) 파생
+변수 생성의 네 단계로 이루어진다.
+
+화재 원자료는 연도별로 분리·제공되며 한글 인코딩(CP949) 문제가 있어,
+파일을 읽을 때 인코딩을 지정하고 컬럼명을 표준화한 뒤 강원도 자료만
+필터링하였다. 이후 '날짜–시군구' 단위로 화재 건수와 재산피해액을
+집계하였다. 기상 자료 역시 CP949 인코딩으로 인한 컬럼명 깨짐을 방지하기
+위해 컬럼을 인덱스 기준으로 재명명하였고, 관측소별 결측치는 선형
+보간(`na.approx`)과 직전·직후값 대체(`na.locf`)로 처리하였다. 마지막으로
+시군구–관측소 매핑 후 '날짜 × 18개 시군구' 전체 격자에 결합하여 화재가
+없는 날에도 기상 정보가 유지되는 완전한 패널을 구성하였다.
+
+```{r preprocess}
+# ── 경로 설정 ───────────────────────────────
+base_dir <- "C:/Users/docto/Desktop/다변량/final project/data"
+fire_dir     <- file.path(base_dir, "fire")             # 연도별 화재 CSV 폴더
+weather_path <- file.path(base_dir, "weather/weather_data.csv")   # 기상 ASOS 파일
+
+# 천 단위 쉼표 제거 후 숫자 변환 헬퍼
+to_num <- function(x) suppressWarnings(as.numeric(gsub(",", "", as.character(x))))
+
+# (1) 화재: 연도별 CSV(2015~2024) 통합 → 강원도 → 날짜·시군구 집계
+fire_files <- list.files(path = fire_dir, pattern = "^20\\d{2}\\.csv$", full.names = TRUE)
+stopifnot(length(fire_files) > 0)
+
+fire_list <- lapply(fire_files, function(file) {
+  df <- read.csv(file, fileEncoding = "CP949", stringsAsFactors = FALSE, check.names = FALSE)
+  names(df) <- str_replace_all(names(df), "화재발생년월일", "일시")
+  names(df) <- str_replace_all(names(df), "시·군·구|시_군_구", "시군구")
+  names(df) <- str_replace_all(names(df), "인명피해\\(명\\)소계", "인명피해소계")
+  df[, c("일시", "시도", "시군구", "인명피해소계", "사망", "부상", "재산피해소계")]
+})
+fire_raw <- bind_rows(fire_list)
+
+fire_agg <- fire_raw %>%
+  filter(str_detect(시도, "강원")) %>%
+  mutate(
+    Date         = as.Date(parse_date_time(일시, orders = c("Ymd HM", "Ymd HMS", "Ymd"))),
+    인명피해소계 = coalesce(to_num(인명피해소계), 0),
+    사망         = coalesce(to_num(사망), 0),
+    부상         = coalesce(to_num(부상), 0),
+    재산피해소계 = coalesce(to_num(재산피해소계), 0)
+  ) %>%
+  group_by(Date, 시군구) %>%
+  summarise(화재건수 = n(),
+            인명피해 = sum(인명피해소계), 사망 = sum(사망),
+            부상     = sum(부상),        재산피해 = sum(재산피해소계),
+            .groups = "drop")
+
+# (2) 기상: 인덱스 기반 재명명 + 관측소별 결측 보간
+weather_raw <- read.csv(weather_path, fileEncoding = "CP949", stringsAsFactors = FALSE)
+colnames(weather_raw)[1:11] <- c("지점", "지점명", "Date", "평균기온", "최저기온", "최고기온",
+                                 "강수량", "최대풍속", "평균풍속", "최소습도", "평균습도")
+weather <- weather_raw %>%
+  mutate(Date = as.Date(Date),
+         across(c(평균기온, 최고기온, 최저기온, 평균습도, 최대풍속, 강수량), to_num),
+         강수량 = coalesce(강수량, 0)) %>%             # 무강수일 = 0
+  group_by(지점명) %>% arrange(Date) %>%
+  mutate(across(c(평균기온, 최고기온, 최저기온, 평균습도, 최대풍속),
+                ~ na.locf(na.locf(na.approx(.x, na.rm = FALSE), na.rm = FALSE),
+                          fromLast = TRUE, na.rm = FALSE))) %>%
+  ungroup() %>%
+  select(지점명, Date, 평균기온, 최고기온, 최저기온, 강수량, 평균습도, 최대풍속)
+
+# (3) 시군구–관측소 매핑 + 전체 격자(날짜 × 18개 시군구) 결합
+mapping <- data.frame(
+  시군구 = c("속초시", "고성군", "양양군",
+             "춘천시", "홍천군", "화천군", "양구군", "인제군",
+             "철원군", "평창군",
+             "원주시", "횡성군", "영월군",
+             "강릉시", "동해시", "삼척시",
+             "태백시", "정선군"),
+  지점명 = c(rep("속초", 3), rep("춘천", 5), "철원", "대관령",
+             rep("원주", 3), rep("강릉", 3), rep("태백", 2)),
+  stringsAsFactors = FALSE
+)
+all_dates <- seq(as.Date("2015-01-01"), as.Date("2024-12-31"), by = "day")
+full_grid <- expand.grid(Date = all_dates, 시군구 = mapping$시군구, stringsAsFactors = FALSE)
+
+gangwon_panel <- full_grid %>%
+  left_join(mapping,  by = "시군구") %>%
+  left_join(weather,  by = c("Date", "지점명")) %>%
+  left_join(fire_agg, by = c("Date", "시군구"))
+```
+
+이후 분석에 필요한 파생 변수를 생성하였다. 일교차(기온교차)는 최고기온과
+최저기온의 차이로, 건조지수는 기온·습도를 결합한 건조도
+지표($\text{평균기온} -
+\text{평균습도}/10$)로 정의하였다. 또한 봄·여름·가을·겨울을 구분하는
+계절 변수(`계절`)와, 시군구를 태백산맥 기준 영동/영서로 구분하는 지역
+변수(`Region`)를 추가하였다. 회귀에 사용하는 봄철 더미(`IsSpring`)는
+2.3절에서 `계절`로부터 생성한다.
+
+```{r feature-eng}
+yeongdong <- c("강릉시", "동해시", "속초시", "삼척시", "고성군", "양양군")
+
+gangwon_panel <- gangwon_panel %>%
+  mutate(
+    화재건수 = coalesce(화재건수, 0),
+    인명피해 = coalesce(인명피해, 0), 사망 = coalesce(사망, 0),
+    부상     = coalesce(부상, 0),     재산피해 = coalesce(재산피해, 0),
+
+    화재발생여부 = ifelse(화재건수 > 0, 1, 0),
+    건조지수 = 평균기온 - (평균습도 / 10),       # 기온·습도 기반 건조도 지표
+    기온교차 = 최고기온 - 최저기온,               # 일교차
+    강수여부 = ifelse(강수량 > 0, 1, 0),
+
+    월   = month(Date),
+    계절 = case_when(
+      월 %in% c(3, 4, 5)   ~ "봄",
+      월 %in% c(6, 7, 8)   ~ "여름",
+      월 %in% c(9, 10, 11) ~ "가을",
+      TRUE                 ~ "겨울"
+    ),
+    Region = ifelse(시군구 %in% yeongdong, "Yeongdong", "Yeongseo")
+  )
+
+# (선택) 패널 산출물 저장
+write.csv(gangwon_panel, "gangwon_panel.csv", row.names = FALSE, fileEncoding = "CP949")
+```
+
+## 2.2 탐색적 데이터 분석 (EDA)
+
+본격적인 모형 적합에 앞서, 구축한 패널 데이터의 규모와 두 종속변수(화재
+건수, 재산피해액)의 분포를 간단히 살펴본다.
+
+```{r eda, fig.height=3.6, fig.cap="그림 1. (좌) 월별 화재 발생 건수 합계, (우) 재산피해액의 로그 변환 분포."}
+# 패널 규모와 화재 발생 비중
+n_total     <- nrow(gangwon_panel)
+n_fire_days <- sum(gangwon_panel$화재건수 > 0)
+cat(sprintf("총 관측(일 × 시군구): %d행 | 화재 발생 관측: %d행 (%.2f%%)\n",
+            n_total, n_fire_days, 100 * n_fire_days / n_total))
+
+# (a) 월별 화재 발생 건수
+p_month <- gangwon_panel %>%
+  group_by(월) %>% summarise(건수 = sum(화재건수), .groups = "drop") %>%
+  ggplot(aes(factor(월), 건수)) +
+  geom_col(fill = "tomato") +
+  theme_bw(base_family = "Malgun Gothic") +
+  labs(title = "월별 화재 발생 건수", x = "월", y = "건수 합계")
+
+# (b) 재산피해액 분포 (로그 스케일, 피해 > 0)
+p_dmg <- gangwon_panel %>%
+  filter(재산피해 > 0) %>%
+  ggplot(aes(log(재산피해 + 1))) +
+  geom_histogram(bins = 40, fill = "steelblue") +
+  theme_bw(base_family = "Malgun Gothic") +
+  labs(title = "재산피해액 분포 (log 스케일)", x = "log(재산피해 + 1)", y = "빈도")
+
+p_month + p_dmg
+```
+
+패널은 10년 치 일자료를 18개 시군구로 펼친 대규모 자료이며, 이 중 화재가
+실제로 발생한 관측은 일부에 해당한다. 월별 화재 건수에서는 계절에 따른
+발생량의 차이가 관찰되며, 이는 2.3절에서 계절 변수를 모형에 포함하는
+근거가 된다. 한편 재산피해액은 대부분의 화재가 소규모인 가운데 일부가 큰
+값을 갖는 뚜렷한 **우측 편포(right-skewness)**를 보여, 로그 스케일에서야
+분포가 안정적으로 관찰된다. 이 편포 특성은 2.4절에서 피해액에 로그
+변환을 적용하는 직접적 근거가 된다.
+
+가설 2의 영동/영서 분석에 앞서, 지역별 풍속과 재산피해의 관계를 탐색적으로
+살펴본다.
+
+```{r eda-region, fig.height=4, fig.cap="그림 2. (좌) 영동·영서 지역별 최대풍속 분포, (우) 지역별 풍속과 로그 피해액의 관계."}
+# 영동/영서별 풍속 분포 및 피해액 비교
+yeongdong_names <- c("강릉시", "동해시", "속초시", "삼척시", "고성군", "양양군")
+eda_fire <- gangwon_panel %>%
+  filter(재산피해 > 0) %>%
+  mutate(Region = ifelse(시군구 %in% yeongdong_names, "영동", "영서"),
+         LogDamage = log(재산피해 + 1))
+
+# (a) 지역별 최대풍속 분포
+p_wind_region <- ggplot(eda_fire, aes(x = Region, y = 최대풍속, fill = Region)) +
+  geom_boxplot(alpha = 0.7) +
+  scale_fill_manual(values = c("영동" = "tomato", "영서" = "steelblue")) +
+  theme_bw(base_family = "Malgun Gothic") +
+  labs(title = "지역별 최대풍속 분포 (화재 발생일)", x = "", y = "최대풍속 (m/s)") +
+  theme(legend.position = "none")
+
+# (b) 지역별 풍속 vs 피해액 산점도
+p_wind_damage <- ggplot(eda_fire, aes(x = 최대풍속, y = LogDamage, color = Region)) +
+  geom_point(alpha = 0.15, size = 0.8) +
+  geom_smooth(method = "lm", se = TRUE, linewidth = 1.2) +
+  scale_color_manual(values = c("영동" = "tomato", "영서" = "steelblue")) +
+  theme_bw(base_family = "Malgun Gothic") +
+  labs(title = "지역별 풍속–피해액 관계", x = "최대풍속 (m/s)",
+       y = "log(재산피해 + 1)", color = "지역")
+
+p_wind_region + p_wind_damage
+```
+
+지역별 풍속 분포에서는 영동과 영서 간 풍속 자체의 차이는 크지 않으나,
+풍속과 피해액의 관계를 보면 두 지역에서 회귀선의 기울기 방향이 다르게
+나타나는 경향이 관찰된다. 이는 2.4절에서 상호작용 항을 통해 통계적으로
+검정할 근거가 된다.
+
+## 2.3 가설 1: 기상 주성분과 계절이 화재 발생 빈도에 미치는 영향 (PCA + Poisson GLM)
+
+재난 대응 체계를 설계할 때 가장 먼저 답해야 할 질문은 '화재가 언제,
+얼마나 자주 발생하는가(빈도)'이다. 기존의 많은 예측 연구는
+기온·습도·풍속 같은 개별 기상 변수를 그대로 회귀 모형에 나열하는 방식을
+취했으나, 기상 변수들은 서로 강하게 상관되어 있어 이 경우 다중공선성으로
+인해 어떤 요인이 실제로 화재와 연관되는지 식별하기 어렵다. 본 가설은
+이러한 한계를 피하기 위해 여러 기상 변수를 주성분 분석으로 독립적인
+소수의 '기상 위험 지수'로 압축하고, 여기에 인위적 점화 요인이 집중되는
+'봄철'을 결합하여 화재 발생 빈도를 설명하고자 한다.
+
+### 2.3.1 가설 설정
+
+강원도 전체를 대상으로, 기상 변수들의 복합적 요인(주성분)과 계절이 화재
+발생 빈도에 유의한 영향을 미치는지 검증한다.
+
+- $H_0$: 기상 주성분과 봄철 변수는 화재 발생 빈도에 유의한 영향을 미치지
+  않는다.
+- $H_A$: 기상 주성분과 봄철 변수는 화재 발생 빈도에 유의한 영향을
+  미친다.
+  
+포아송 회귀 모형식과 귀무가설을 수식으로 표현하면 다음과 같다.
+
+$$\ln(E[\text{화재건수}]) = \beta_0 + \beta_1 \cdot \text{PC1} +
+\beta_2 \cdot \text{PC2} + \beta_3 \cdot \text{IsSpring}$$
+
+$$H_0: \beta_1 = \beta_2 = \beta_3 = 0$$
+$$H_A: \exists\, i \in \{1, 2, 3\} \text{ s.t. } \beta_i \neq 0$$
+
+여기서 $\beta_1$, $\beta_2$, $\beta_3$은 각각 한랭·건조 지수(PC1),
+돌풍·일교차 지수(PC2), 봄철 더미(IsSpring)의 회귀계수이며, 귀무가설은
+세 계수가 모두 0임을 의미한다.
+
+### 2.3.2 분석 방법: 차원 축소(PCA)
+
+기상 변수들은 '기온이 오르면 습도가 영향을 받는' 식으로 서로 강하게
+상관되어 있어, 이를 그대로 회귀에 투입하면 다중공선성으로 인해 계수
+추정이 불안정해진다. 이를 완화하기 위해 5개 연속형 기상 변수(평균기온,
+평균습도, 최대풍속, 건조지수, 기온교차)를 표준화한 뒤 주성분 분석(PCA)을
+수행하였다.
+
+```{r corr-heatmap, fig.height=4.5, fig.cap="그림 X. 기상 변수 간 피어슨 상관계수 히트맵. 색이 진할수록 강한 상관관계를 나타낸다."}
+library(reshape2)
+
+pca_cols <- c("평균기온", "평균습도", "최대풍속", "건조지수", "기온교차")
+
+# 상관계수 행렬 계산
+corr_mat <- gangwon_panel %>%
+  select(all_of(pca_cols)) %>%
+  mutate(across(everything(), as.numeric)) %>%
+  filter(if_all(everything(), is.finite)) %>%
+  cor(method = "pearson")
+
+# 히트맵용 long format 변환
+corr_long <- melt(corr_mat)
+colnames(corr_long) <- c("Var1", "Var2", "Correlation")
+
+# 히트맵 시각화
+ggplot(corr_long, aes(x = Var1, y = Var2, fill = Correlation)) +
+  geom_tile(color = "white", linewidth = 0.5) +
+  geom_text(aes(label = sprintf("%.2f", Correlation)),
+            size = 3.8, fontface = "bold",
+            color = ifelse(abs(corr_long$Correlation) > 0.5, "white", "black")) +
+  scale_fill_gradient2(
+    low  = "#2166AC",   # 강한 음의 상관 → 파란색
+    mid  = "white",
+    high = "#B2182B",   # 강한 양의 상관 → 빨간색
+    midpoint = 0,
+    limits = c(-1, 1),
+    name = "Pearson\nCorrelation"
+  ) +
+  theme_bw(base_family = "Malgun Gothic") +
+  theme(
+    axis.text.x  = element_text(angle = 30, hjust = 1, size = 11),
+    axis.text.y  = element_text(size = 11),
+    legend.title = element_text(size = 10),
+    plot.title   = element_text(hjust = 0.5, face = "bold")
+  ) +
+  labs(
+    title = "기상 변수 간 상관관계 히트맵 (Pearson Correlation)",
+    x = NULL, y = NULL
+  ) +
+  coord_fixed()
+```
+
+히트맵에서 평균기온과 건조지수 간 상관계수가 0.99로 사실상 
+동일한 정보를 담고 있으며, 평균습도와 건조지수 간에도 0.16,
+평균기온과 평균습도 간 0.33의 상관이 관찰된다. 최대풍속은
+다른 변수들과 상대적으로 독립적이나, 기온교차는 평균습도와
+-0.39의 음의 상관을 보인다. 이처럼 기상 변수들 간 상관관계가
+존재하므로, 이를 그대로 회귀에 투입하면 다중공선성으로 인해
+계수 추정이 불안정해진다. 이를 완화하기 위해 5개 변수를
+주성분 분석(PCA)으로 독립적인 소수의 지수로 압축하였다.
+
+```{r pca}
+pca_cols <- c("평균기온", "평균습도", "최대풍속", "건조지수", "기온교차")
+
+# 전처리 패널에서 PCA 입력 정리(수치형 강제 + NA/Inf 제거) 및 봄철 더미 생성
+panel_df <- gangwon_panel %>%
+  mutate(across(all_of(pca_cols), as.numeric)) %>%
+  filter(if_all(all_of(pca_cols), is.finite)) %>%
+  mutate(IsSpring = factor(ifelse(계절 == "봄", "Spring", "Other"),
+                           levels = c("Other", "Spring")))
+
+# 주성분 분석
+pca_result <- prcomp(panel_df[, pca_cols], center = TRUE, scale. = TRUE)
+summary(pca_result)                 # 설명 분산 비율
+round(pca_result$rotation[, 1:2], 3)  # PC1, PC2 loading
+
+# 해석 편의를 위해 PC1 부호 반전(값↑ = 한랭·건조), PC2는 그대로(돌풍·일교차)
+panel_df$PC1_Index <- -pca_result$x[, 1]
+panel_df$PC2_Index <-  pca_result$x[, 2]
+```
+
+```{r pca-viz, fig.height=4, fig.cap="그림 3. (좌) Scree Plot: 주성분별 설명 분산 비율 및 누적 비율, (우) Loading Plot: PC1–PC2 공간에서의 변수 적재 방향."}
+# (a) Scree Plot — 각 주성분의 설명 분산 비율
+var_explained <- summary(pca_result)$importance[2, ] * 100
+cum_var       <- summary(pca_result)$importance[3, ] * 100
+scree_df <- data.frame(PC = paste0("PC", 1:length(var_explained)),
+                       Variance = var_explained,
+                       Cumulative = cum_var)
+scree_df$PC <- factor(scree_df$PC, levels = scree_df$PC)
+
+p_scree <- ggplot(scree_df, aes(PC, Variance)) +
+  geom_col(fill = "steelblue") +
+  geom_line(aes(y = Cumulative, group = 1), color = "red", linewidth = 1) +
+  geom_point(aes(y = Cumulative), color = "red", size = 3) +
+  geom_text(aes(label = sprintf("%.1f%%", Variance)), vjust = -0.5, size = 3.5) +
+  theme_bw(base_family = "Malgun Gothic") +
+  labs(title = "Scree Plot (설명 분산 비율)", x = "주성분", y = "분산 비율 (%)")
+
+# (b) Biplot — PC1, PC2 loading 방향
+loadings <- as.data.frame(pca_result$rotation[, 1:2])
+loadings$Variable <- rownames(loadings)
+
+p_biplot <- ggplot(loadings, aes(x = PC1, y = PC2)) +
+  geom_segment(aes(xend = 0, yend = 0), arrow = arrow(ends = "first", length = unit(0.2, "cm")),
+               color = "darkred", linewidth = 0.8) +
+  geom_text(aes(label = Variable), vjust = -0.7, size = 3.5, family = "Malgun Gothic") +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "grey50") +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "grey50") +
+  coord_equal() +
+  theme_bw(base_family = "Malgun Gothic") +
+  labs(title = "PCA Loading Plot (PC1 vs PC2)", x = "PC1", y = "PC2")
+
+p_scree + p_biplot
+```
+
+Scree Plot에서 PC1과 PC2가 전체 분산의 약 69.4%를 설명하며, PC3 이후
+설명력이 급감하여 2개 주성분의 채택이 적절함을 확인할 수 있다.
+Loading Plot에서는 평균기온과 건조지수가 PC1 방향으로, 기온교차와
+최대풍속이 PC2 방향으로 묶이는 패턴이 시각적으로 드러나며, 이는 아래
+표의 loading 수치와 일치한다.
+
+분석 결과 상위 두 주성분이 전체 기상 변동성의 약 **69.4%**를
+설명하였으며, 각 주성분의 loading을 해석하여 다음과 같이 명명하였다.
+
+| 주성분 | 설명 분산 | 주요 loading | 명명 |
+|:---|:--:|:---|:---|
+| PC1 | 43.6% | 평균기온 (+0.646), 평균습도 (+0.373) | 한랭·건조 지수 (Cold-Dry Index) |
+| PC2 | 25.8% | 평균습도 (-0.599), 기온교차 (+0.543), 건조지수 (+0.382), 최대풍속 (+0.363) | 돌풍·일교차 지수 (Gale & Diurnal Index) |
+
+PC1은 평균기온과 평균습도에 양(+)의 loading을 가져 값이 클수록
+'고온·다습'을 의미하였다. 해석의 직관성을 위해 PC1에 음(-)의 부호를
+곱하여 방향을 반전시켰으며, 그 결과 값이 클수록 '저온·저습(한랭·건조)'을
+나타내도록 정의하고 이를 **한랭·건조 지수**로 명명하였다. PC2는 습도가
+급감하는 가운데 일교차·건조도·최대풍속이 동반 상승하는 패턴으로, 계절
+평균 기온과 무관하게 일교차가 크고 국지적 돌풍이 부는 변덕스러운 날씨를
+포착한다. 이를 **돌풍·일교차 지수**로 명명하였다.
+
+### 2.3.3 모델링: 로지스틱 회귀에서 포아송 회귀로의 전환
+
+초기에는 수업에서 다룬 **로지스틱 회귀(Logistic GLM)**로 하루 단위 화재
+'발생 여부(0/1)'를 모델링하고, 기상 악화와 봄철 사이의 상호작용을
+가정하였다. 그러나 해당 상호작용 항의 p-value가 **0.673**로 유의하지
+않았고, 더 근본적으로 로지스틱 모델은 하루에 1건이 난 날과 10건이
+동시다발적으로 난 날을 모두 동일한 '1(발생)'로 취급하여
+**다발성(multiplicity) 위험**을 구분하지 못한다는 한계가 있었다.
+
+이에 종속변수를 발생 '건수(0, 1, 2, …)'로 바꾸고, 카운트 자료에 적합한
+**포아송 회귀(Poisson GLM)**로 모델을 전환하였다. 포아송 회귀는
+로그-링크 함수 $\ln(E[\text{건수}]) = X\beta$ 를 사용하므로 예측값이
+항상 음이 아니며, 회귀계수에 지수 변환 $e^{\beta}$ 를 취하면 변수 1단위
+증가에 따른 기대 발생 건수의 **배율(비율) 변화**로 해석할 수 있다.
+
+```{r poisson}
+# (초기 시도) 로지스틱: 기상×봄철 상호작용 항 비유의(p ≈ 0.673)
+logit_init <- glm(factor(화재발생여부) ~ PC1_Index * IsSpring + PC2_Index,
+                  data = panel_df, family = binomial(link = "logit"))
+summary(logit_init)
+
+# (최종) 포아송: 발생 '건수'를 종속변수로
+poisson_model <- glm(화재건수 ~ PC1_Index + PC2_Index + IsSpring,
+                     data = panel_df, family = poisson(link = "log"))
+summary(poisson_model)
+
+# 과대산포 점검(1에서 크게 벗어나면 준포아송/음이항 고려)
+disp <- sum(residuals(poisson_model, type = "pearson")^2) / poisson_model$df.residual
+cat("Poisson dispersion ratio =", round(disp, 3), "\n")
+```
+
+### 2.3.4 결과 및 해석
+
+포아송 회귀 결과, 세 설명변수가 모두 화재 발생 빈도에 통계적으로 유의한
+양(+)의 영향을 미쳤다.
+
+| 변수 | 계수 $\beta$ | $e^{\beta}$ | 해석 (1단위 증가 시) | p-value |
+|:---|:--:|:--:|:---|:--:|
+| (Intercept) | -1.223 | — | 기준 기대 건수 | \< 2e-16 |
+| PC1_Index (한랭·건조) | +0.118 | 1.125 | 발생 건수 약 +12.5% | \< 2e-16 |
+| PC2_Index (돌풍·일교차) | +0.207 | 1.230 | 발생 건수 약 +23.0% | \< 2e-16 |
+| IsSpring (봄철) | +0.096 | 1.101 | 발생 건수 약 +10.1% | 4.31e-09 |
+
+```{r poisson-plot, fig.height=4, fig.cap="그림 4. 한랭·건조 지수(PC1)에 따른 계절별 예측 화재 건수. 빨간선은 봄철, 파란선은 그 외 계절."}
+# 한랭·건조 지수(PC1)에 따른 예측 화재 건수 (계절별)
+ggplot(panel_df, aes(x = PC1_Index, y = 화재건수, color = IsSpring)) +
+  geom_smooth(method = "glm", method.args = list(family = "poisson"), linewidth = 1.2) +
+  theme_bw(base_family = "Malgun Gothic") +
+  labs(title = "기상 지수·계절에 따른 일별 예측 화재 건수 (Poisson)",
+       x = "한랭·건조 지수 (반전 PC1)", y = "예측 화재 건수", color = NULL) +
+  scale_color_manual(values = c("Spring" = "red", "Other" = "blue")) +
+  theme(plot.title = element_text(hjust = 0.5, face = "bold"))
+```
+
+세 설명변수 가운데 돌풍·일교차 지수(PC2)의 영향이 가장 컸다. PC2의
+계수는 +0.207로, 지수가 1 표준편차 증가할 때마다 일일 화재 발생 건수가
+약 23% 증가한다. 주성분은 표준화된 값(평균 0, 표준편차 1)이므로, 강풍
+특보 수준으로 PC2가 +3까지 상승하면 발생 건수는
+$e^{3 \times 0.207} = e^{0.621} \approx 1.86$, 즉 평상시 대비 약 86%
+증가한다. 이는 단순히 춥고 건조한 날씨(PC1, 단위당 +12.5%)보다, 일교차가
+크고 국지적 강풍이 부는 변덕스러운 날씨가 화재의 다발성을 더 강하게
+유발함을 의미한다.
+
+한편 봄철은 기상 조건과 독립적인 기저 위험 요인으로 나타났다. 기상
+조건(PC1, PC2)을 통제한 상태에서도 단지 계절이 봄이라는 사실만으로 발생
+건수가 약 10% 높아진다($e^{0.096} \approx 1.10$). 이는 초기 로지스틱
+모델에서 기상–봄철 상호작용이 유의하지 않았던 점과도 일관된다. 즉 봄철의
+위험은 날씨 악화를 '증폭'시키는 형태가 아니라, 입산객 증가·영농 부산물
+소각 등 인위적 요인으로 인해 기저 위험 수준 자체가 상향
+이동(level shift)하는 형태로 나타난다. 이는 산림청
+산불통계연보(2024)에서 최근 10년간 산불 원인의 31%가 입산자 실화, 23%가
+쓰레기·농산부산물 소각이었으며 봄철(2\~5월)에 전체 산불 건수의 66%가
+집중된다는 통계와 부합한다.
+
+따라서 귀무가설 $H_0$는 기각되며, 기상 주성분과 봄철 변수는 화재 발생
+빈도에 유의한 영향을 미친다.
+
+한편 과대산포 점검 결과, 피어슨 잔차 기반 분산비(dispersion ratio)는
+`r round(disp, 2)`로 1을 상회하였다. 이는 관측된 분산이 포아송 모형이
+가정하는 평균–분산 동일성보다 크다는 것을 의미하며, 표준오차가 과소
+추정되어 p-value가 낙관적으로 보고되었을 가능성을 시사한다. 이 한계는
+3.3절에서 향후 과제(음이항 회귀 비교)로 다시 논의한다.
+
+### 2.3.5 본 연구의 기여 (Own Contribution)
+
+**차원 축소를 통한 다중공선성 완화 및 해석력 확보**: 서로 상관된 기상
+변수들을 PCA로 독립적인 두 차원(PC1: 한랭·건조 지수, PC2: 돌풍·일교차
+지수)으로 정리하였다. 특히 PC1의 부호를 반전시켜 값이 클수록 위험한 기상
+조건을 나타내도록 정의하여 해석을 용이하게 하였다.
+
+**이진 분류에서 포아송 카운트 모델로의 전환**: 초기에는 화재 발생
+여부(0/1)를 종속변수로 한 로지스틱 회귀를 시도했으나, 이는 다발성을
+반영하지 못한다는 한계가 있었다. 이에 종속변수를 일일 발생 건수로
+변경하고 포아송 회귀를 적용하여 다발성 산불과 기상 요인의 연관성을
+추정하였다.
+
+**상호작용 기각 결과의 해석**: 기상 지수와 봄철의 상호작용 항이 유의하지
+않게 나온 결과를, 봄철 위험이 기상 악화 민감도와 무관하게 인위적
+요인(입산객, 소각 등)으로 기저 위험(baseline risk)을 독립적으로 높이는
+형태로 해석하였다.
+
+## 2.4 가설 2: 지형(영동/영서)과 풍속의 상호작용이 피해 규모에 미치는 영향 (MLR + Interaction)
+
+가설 1이 화재가 '얼마나 자주' 발생하는지(빈도)를 다루었다면, 재난 대응의
+다음 과제는 '일단 발생한 화재의 피해가 얼마나 커지는가(심도)'이다.
+강원도는 태백산맥을 경계로 영서와 영동으로 나뉘며, 봄철 서풍이 산맥을
+넘으며 고온 건조한 강풍으로 바뀌는 양간지풍이 영동에서 자주 관측된다.
+이에 본 가설은 '바람이 불면 피해가 커진다'는 단순한 1차원적 관계를
+넘어서, 풍속이 피해를 키우는 정도가 지형(영동/영서)에 따라 달라질
+것이라는 **상호작용 효과**를 검정하고자 한다.
+
+### 2.4.1 가설 설정
+
+태백산맥을 경계로 한 영동·영서 지역 간에 풍속이 화재 피해 규모에 미치는
+영향(기울기)이 다른지, 즉 양간지풍에 해당하는 지형–풍속 상호작용 효과가
+존재하는지 검증한다.
+
+- $H_0$: 지역 구분(영동 vs 영서)은 풍속이 피해액에 미치는 영향(기울기)에
+  상호작용 효과를 주지 않는다 ($\beta_{\text{interaction}} = 0$).
+- $H_A$: 영동 지역에서 풍속이 피해액에 미치는 영향이 영서와 유의하게
+  다른 상호작용 효과가 존재한다 ($\beta_{\text{interaction}} \ne 0$).
+
+### 2.4.2 분석 방법: 로그 변환과 이상치 정제
+
+종속변수인 재산피해액은 소형 화재가 대다수인 가운데 대형 화재가
+극단적으로 큰 값을 갖는 우측 편포 분포를 보인다(2.2절). 이를 그대로
+회귀에 투입하면 소수의 극단값이 회귀선을 왜곡하고 잔차의 정규성·등분산성
+가정이 위배되므로, 피해액에 자연로그를 취한
+`LogDamage`$= \log(\text{재산피해}+1)$를 종속변수로 사용한다. 로그
+변환된 모델의 계수는 $e^{\beta}$ 를 통해 '풍속 증가에 따른 피해액의
+비율(%) 변화'로 해석할 수 있다.
+
+또한 기상 조건과 무관하게 발생한 극단 피해(예: 방화)가 추정을 왜곡하지
+않도록, **Cook's Distance**로 영향점(influential point)을 식별·제거한
+자료(`fire_cleaned_df`)를 사용한다. 분석 대상은 피해가 발생한
+사건(재산피해 \> 0)으로 한정하며, 지역 더미(`Region`)의 기준 범주는
+영서(Yeongseo)로 둔다.
+
+```{r h2-prep}
+# 피해 발생 사건만 추출 + 로그 변환 + 지역 더미(기준=영서)
+fire_base <- gangwon_panel %>%
+  filter(재산피해 > 0, complete.cases(최대풍속, 평균기온, 평균습도)) %>%
+  mutate(LogDamage = log(재산피해 + 1),
+         Region    = factor(Region, levels = c("Yeongseo", "Yeongdong")))
+
+# Cook's Distance로 영향점 제거 → fire_cleaned_df
+mlr_pre <- lm(LogDamage ~ 최대풍속 * Region + 평균기온 + 평균습도, data = fire_base)
+cooksd  <- cooks.distance(mlr_pre)
+thr     <- 4 / nrow(fire_base)                   # 통상 기준 4/n
+fire_cleaned_df <- fire_base[!is.na(cooksd) & cooksd <= thr, ]
+cat("Cook's Distance 정제:", nrow(fire_base), "→", nrow(fire_cleaned_df), "행\n")
+```
+
+### 2.4.3 지역별 순수 풍속 효과 (편회귀 시각화)
+
+상호작용 모델에 앞서, 두 지역에서 풍속의 효과가 실제로 다른지 직관적으로
+확인하기 위해 기온과 습도의 영향을 제거한 **편회귀(partial regression)**
+분석을 수행하였다. 각 지역별로 최대풍속과 `LogDamage`를 각각
+평균기온·평균습도에 회귀한 잔차를 구한 뒤, 두 잔차 간의 관계를
+시각화하면 다른 변수가 통제된 '순수한 풍속–피해' 관계를 볼 수 있다. 이때
+잔차 회귀의 기울기는 FWL(Frisch–Waugh–Lovell) 정리에 의해 기온·습도를
+통제한 편회귀계수와 정확히 같다.
+
+```{r partial-reg, fig.height=4, fig.cap="그림 5. 기온·습도를 통제한 순수 풍속–피해 편회귀. (좌) 영서: 음의 기울기, (우) 영동: 양의 기울기."}
+yeongdong_df <- fire_cleaned_df %>% filter(Region == "Yeongdong")
+yeongseo_df  <- fire_cleaned_df %>% filter(Region == "Yeongseo")
+
+# 지역별 MLR(기온·습도 통제)의 최대풍속 기울기 — 그래프·본문에 공통 사용
+mlr_yeongdong <- lm(LogDamage ~ 최대풍속 + 평균기온 + 평균습도, data = yeongdong_df)
+mlr_yeongseo  <- lm(LogDamage ~ 최대풍속 + 평균기온 + 평균습도, data = yeongseo_df)
+slope_yd <- coef(mlr_yeongdong)[["최대풍속"]]
+slope_ys <- coef(mlr_yeongseo)[["최대풍속"]]
+
+# 기온·습도를 통제한 순수 풍속/피해 잔차 추출 (FWL 정리)
+add_partial <- function(df) {
+  df$Wind_Pure   <- residuals(lm(최대풍속  ~ 평균기온 + 평균습도, data = df))
+  df$Damage_Pure <- residuals(lm(LogDamage ~ 평균기온 + 평균습도, data = df))
+  df
+}
+yeongseo_df  <- add_partial(yeongseo_df)
+yeongdong_df <- add_partial(yeongdong_df)
+
+p_ys <- ggplot(yeongseo_df, aes(Wind_Pure, Damage_Pure)) +
+  geom_point(alpha = 0.2, color = "blue") +
+  geom_smooth(method = "lm", se = TRUE, color = "darkblue", fill = "lightblue", linewidth = 1.3) +
+  theme_bw(base_family = "Malgun Gothic") +
+  labs(title = "Yeongseo (Normal Wind)", subtitle = sprintf("Slope: %+.3f", slope_ys),
+       x = "Pure Wind Speed (residuals)", y = "Pure Log(Damage) (residuals)")
+
+p_yd <- ggplot(yeongdong_df, aes(Wind_Pure, Damage_Pure)) +
+  geom_point(alpha = 0.2, color = "red") +
+  geom_smooth(method = "lm", se = TRUE, color = "darkred", fill = "pink", linewidth = 1.3) +
+  theme_bw(base_family = "Malgun Gothic") +
+  labs(title = "Yeongdong (Yangganjipung)", subtitle = sprintf("Slope: %+.3f", slope_yd),
+       x = "Pure Wind Speed (residuals)", y = "Pure Log(Damage) (residuals)")
+
+p_ys + p_yd
+```
+
+기상 노이즈(기온·습도)를 제거하면 두 지역의 풍속 효과는 부호가 반대로
+나타났다(아래 수치는 위 코드가 산출한 편회귀계수로, 그래프의 기울기와
+일치한다).
+
+- **영서 지방**: 기울기 `r round(slope_ys, 3)`. 일반적인 내륙 지형에서는
+  풍속 증가가 피해 확대로 직결되지 않으며, 오히려 강수 동반 강풍이나
+  야외활동 위축 등 복합 요인으로 피해가 다소 억제되는 경향을 보인다.
+- **영동 지방**: 기울기 `r sprintf("%+.3f", slope_yd)`. 양간지풍
+  영향권에서는 풍속 증가가 피해를 확대시키는 방향으로 작용한다.
+
+### 2.4.4 상호작용 항을 포함한 다중선형회귀(MLR)
+
+위에서 관찰된 기울기 역전이 통계적으로 유의한지 검정하기 위해, 풍속과
+지역의 상호작용 항을 포함한 다중선형회귀를 적합하였다. 모형은 다음과
+같다.
+
+$$\text{LogDamage} = \beta_0 + \beta_1\,\text{Wind} + \beta_2\,\text{Region}
++ \beta_3\,(\text{Wind} \times \text{Region}) + \beta_4\,\text{Temp} + \beta_5\,\text{Humid} + \epsilon$$
+
+```{r mlr}
+mlr_interaction <- lm(LogDamage ~ 최대풍속 * Region + 평균기온 + 평균습도,
+                      data = fire_cleaned_df)
+summary(mlr_interaction)
+
+# 본문 표·해석에 사용할 수치 추출(코드 산출값과 본문 수치를 일치시킴)
+co     <- coef(mlr_interaction)
+pv     <- summary(mlr_interaction)$coefficients[, "Pr(>|t|)"]
+b_ys   <- co[["최대풍속"]]                          # 영서 기준 기울기
+b_diff <- co[["최대풍속:RegionYeongdong"]]          # 상호작용 항
+b_yd   <- b_ys + b_diff                             # 영동 기울기
+exp_yd <- exp(b_yd); pct_yd <- (exp_yd - 1) * 100; mult10 <- exp_yd^10
+fmt_p     <- function(p) ifelse(p < 0.001, "< 0.001", sprintf("%.3f", p))
+p_ys_wind <- fmt_p(pv[["최대풍속"]])
+p_int     <- fmt_p(pv[["최대풍속:RegionYeongdong"]])
+r2_adj    <- summary(mlr_interaction)$adj.r.squared
+```
+
+상호작용 항을 중심으로 한 추정 결과는 다음과 같다(기준 범주는 영서).
+
+| 항목 | 계수 | p-value |
+|:---|:--:|:--:|
+| 최대풍속 (영서 기준 기울기) | `r round(b_ys, 3)` | `r p_ys_wind` |
+| 최대풍속 : Region(영동) — 상호작용 항 | `r sprintf("%+.3f", b_diff)` | `r p_int` |
+| 영동 지역 풍속 기울기 (= 영서 기울기 + 상호작용) | **`r sprintf("%+.3f", b_yd)`** | — |
+
+*기온·습도는 통제 변수로 함께 포함되었다.*
+
+모형의 수정 결정계수(Adjusted $R^2$)는 `r round(r2_adj, 4)`로 낮은
+편이다. 이는 화재 피해액이 기상 조건 외에도 건물 유형, 진화 대응 속도,
+발화 원인 등 다양한 요인에 의해 결정되기 때문으로, 본 모형은 전체 피해를
+예측하는 것이 아니라 **풍속 효과가 지역에 따라 유의하게 달라지는지**를
+검정하는 데 목적이 있다.
+
+상호작용 항이 유의하므로($p$ `r p_int`), 풍속이 피해액에 미치는 영향은
+지역에 따라 통계적으로 유의하게 다르다. 또한 상호작용 모형이 산출한 두
+지역 기울기(영서 `r round(b_ys, 3)`, 영동 `r sprintf("%+.3f", b_yd)`)는
+2.4.3절에서 지역별로 따로 적합한 편회귀 기울기(`r round(slope_ys, 3)`,
+`r sprintf("%+.3f", slope_yd)`)와 거의 일치하여, 두 접근이 서로의 결과를
+뒷받침한다.
+
+**해석.** 가장 주목할 점은 상호작용 항의 크기보다 **풍속 효과의 부호가
+역전된다는 사실**이다. 영서에서 피해를 억제하던
+바람(`r round(b_ys, 3)`)이 태백산맥을 넘어 영동으로 진입하면 피해를
+확대시키는 방향(`r sprintf("%+.3f", b_yd)`)으로 바뀐다. 종속변수가 로그
+변환된 값이므로 영동의 기울기 `r sprintf("%+.3f", b_yd)`은
+$\exp(`r round(b_yd, 3)`) \approx `r round(exp_yd, 3)`$, 즉 풍속이 1 m/s
+증가할 때 피해 규모가 약 **`r round(pct_yd, 1)`%** 증가함을 의미한다.
+풍속이 평소보다 10 m/s 더 강하게 부는 경우 피해는 약
+**`r round(mult10, 2)`배**로 증가한다. 이는 작은 계수값이 로그
+스케일에서 큰 피해 차이로 환산됨을 보여준다.
+
+따라서 귀무가설 $H_0$는 기각되며, 지형과 풍속 사이에는 유의한 상호작용
+효과가 존재한다.
+
+```{r interaction-plot, fig.height=4.2, fig.cap="그림 6. 지역별 풍속–예측 피해액 상호작용 시각화. 기온·습도는 평균값으로 고정하였다."}
+# 풍속 범위에 걸친 예측값 생성 (기온·습도 = 평균값 고정)
+wind_seq <- seq(
+  min(fire_cleaned_df$최대풍속, na.rm = TRUE),
+  max(fire_cleaned_df$최대풍속, na.rm = TRUE),
+  length.out = 200
+)
+
+pred_grid <- expand.grid(
+  최대풍속 = wind_seq,
+  Region   = factor(c("Yeongseo", "Yeongdong"),
+                    levels = c("Yeongseo", "Yeongdong"))
+) %>%
+  mutate(
+    평균기온 = mean(fire_cleaned_df$평균기온, na.rm = TRUE),
+    평균습도 = mean(fire_cleaned_df$평균습도, na.rm = TRUE)
+  )
+
+pred_grid$fit <- predict(mlr_interaction, newdata = pred_grid)
+
+# 기울기 라벨 위치 계산
+label_x <- max(wind_seq) * 0.78
+yd_y <- pred_grid$fit[pred_grid$Region == "Yeongdong" &
+                       pred_grid$최대풍속 == max(wind_seq)]
+ys_y <- pred_grid$fit[pred_grid$Region == "Yeongseo"  &
+                       pred_grid$최대풍속 == max(wind_seq)]
+
+ggplot(pred_grid, aes(x = 최대풍속, y = fit,
+                      color = Region, linetype = Region)) +
+  geom_line(linewidth = 1.5) +
+  # 두 선 사이 음영 → 상호작용 크기 강조
+  geom_ribbon(
+    data = pred_grid %>%
+      tidyr::pivot_wider(id_cols = 최대풍속,
+                         names_from = Region,
+                         values_from = fit) %>%
+      rename(ys = Yeongseo, yd = Yeongdong),
+    aes(x = 최대풍속, ymin = ys, ymax = yd),
+    inherit.aes = FALSE,
+    fill = "gray70", alpha = 0.2
+  ) +
+  # 기울기 주석
+  annotate("text",
+           x = label_x, y = yd_y + 0.08,
+           label = sprintf("Yeongdong  slope = %+.3f", b_yd),
+           color = "#E76F51", size = 3.5, fontface = "bold",
+           hjust = 0) +
+  annotate("text",
+           x = label_x, y = ys_y - 0.08,
+           label = sprintf("Yeongseo   slope = %.3f", b_ys),
+           color = "#3B82F6", size = 3.5, fontface = "bold",
+           hjust = 0) +
+  # 수평선 (slope = 0 기준)
+  geom_hline(yintercept = mean(pred_grid$fit),
+             linetype = "dotted", color = "gray50", linewidth = 0.5) +
+  scale_color_manual(
+    values = c("Yeongseo" = "#3B82F6", "Yeongdong" = "#E76F51"),
+    labels = c("Yeongseo  (Normal Wind ↓ damage)",
+               "Yeongdong (Yangganjipung ↑ damage)")
+  ) +
+  scale_linetype_manual(
+    values = c("Yeongseo" = "dashed", "Yeongdong" = "solid"),
+    labels = c("Yeongseo  (Normal Wind ↓ damage)",
+               "Yeongdong (Yangganjipung ↑ damage)")
+  ) +
+  theme_bw() +
+  labs(
+    title    = "Interaction Effect: Wind Speed × Region → Predicted Log(Damage)",
+    subtitle = "Temp & Humidity held at mean values | Slope reversal confirms Foehn effect",
+    x        = "최대풍속 (m/s)",
+    y        = "예측 Log(Damage)",
+    color    = NULL, linetype = NULL
+  ) +
+  theme(
+    legend.position  = "bottom",
+    legend.text      = element_text(size = 10),
+    plot.title       = element_text(face = "bold", hjust = 0.5, size = 12),
+    plot.subtitle    = element_text(hjust = 0.5, color = "gray50", size = 9)
+  )
+```
+
+### 2.4.5 본 연구의 기여 (Own Contribution)
+
+**종속변수 로그 변환의 근거 제시**: 재산피해액은 소형 화재가 대부분을
+차지하고 대형 산불이 드물게 발생하여 우측으로 크게 치우친 분포를 보인다.
+이를 그대로 모델링하면 잔차의 정규성·등분산성 가정이 위배되므로, 로그
+변환으로 분포의 편포를 완화하였다. 해석 시에는 지수 변환($e^\beta$)을
+적용하여 풍속 1 m/s 증가에 따른 피해액의 비율(%) 변화로 환산하였다.
+
+**Cook's Distance를 이용한 이상치 정제**: 기상 요인과 무관하게 발생한
+방화나 고가 시설물 화재 등 회귀선을 왜곡할 수 있는 영향점을 통계적
+기준($4/N$)으로 식별·제거하여 추정의 안정성을 높였다.
+
+**지형에 따른 기울기 역전의 정량화**: 영서에서 화재 확산을 억제하던
+바람의 효과가 영동에서는 확대시키는 방향으로 바뀌는 지형–풍속
+상호작용을, 상호작용 계수($\beta_{\text{interaction}} =$
+`r sprintf("%+.3f", b_diff)`)로 확인하였다.
+
+------------------------------------------------------------------------
+
+# 3. Conclusions
+
+## 3.1 주요 발견 요약
+
+본 연구는 강원도의 시공간 패널 데이터를 구축하여 기상 조건이 화재의 발생
+빈도와 피해 규모에 미치는 영향을 두 가지 모델로 분석하였다. 1.2절에서
+제기한 두 가지 연구 질문에 대한 답은 다음과 같다.
+
+**연구 질문 1: 기상 변수들의 복합적 요인(주성분)과 계절은 화재 발생
+빈도에 유의한 영향을 미치는가?**
+
+그렇다. 가설 1의 귀무가설은 기각되었다. PCA로 추출한 두 기상
+주성분(한랭·건조 지수, 돌풍·일교차 지수)과 봄철 변수가 모두 포아송
+회귀에서 통계적으로 유의한 양(+)의 영향을 보였다. 특히 일교차가 크고
+국지적 강풍이 동반되는 돌풍·일교차 지수(PC2)의 영향(단위당 +23%)이 가장
+컸으며, 봄철은 기상과 무관하게 기저 발생 위험을 약 10% 높이는 독립적
+요인으로 나타났다. 다만 피어슨 분산비(`r round(disp, 2)`)가 1을 상회하는
+과대산포가 관찰되어, 표준오차가 다소 낙관적으로 추정되었을 가능성이
+있다.
+
+**연구 질문 2: 영동과 영서 지역 간에 풍속이 화재 피해 규모에 미치는
+영향은 다른가?**
+
+그렇다. 가설 2의 귀무가설은 기각되었다. 풍속과 지역(영동/영서)의
+상호작용 항이 통계적으로 유의하였다($p$ `r p_int`). 영서에서는 풍속의
+효과가 음(`r round(b_ys, 3)`)인 반면, 영동에서는
+양(`r sprintf("%+.3f", b_yd)`)으로 부호가 역전되었다. 이는 양간지풍으로
+대표되는 강원도의 지형적 특성이 화재 피해 확산에 미치는 차별적 영향을
+데이터로 뒷받침한다. 다만 모형의 수정 결정계수(Adjusted
+$R^2$ = `r round(r2_adj, 4)`)는 낮으며, 이는 피해액의 변동이 기상 외
+요인에 의해서도 결정됨을 의미한다.
+
+## 3.2 시스템 공학적 시사점
+
+본 연구의 결과는 한정된 방재 자원을 빈도와 심도 양 측면에서 배분하는 데
+참고가 될 수 있다.
+
+**빈도 기반의 조기 경보 (가설 1).** 발생 빈도와 가장 강하게 연관된
+요인은 단일 습도 지표가 아니라 일교차·돌풍을 함께 반영하는 돌풍·일교차
+지수(PC2)였다(단위당 약 +23%). 따라서 기존의 습도 중심 건조 경보에 PC2를
+보조 지표로 함께 반영하는 방안을 고려할 수 있다. 또한 봄철에는 기상
+조건이 양호하더라도 기저 위험이 약 10% 높게 나타나므로, 계절 도래와 함께
+예방 순찰·입산 통제를 상시적으로 운영하는 것이 합리적이다.
+
+**심도 기반의 자원 배치 (가설 2).** 풍속 증가에 따른 피해 확대 효과는
+영동에서만 양(+)으로 나타났고 영서에서는 음(-)이었다. 따라서 강풍 특보
+발효 시 진화 자원을 강원 전역에 균등(1/n) 배분하기보다, 피해 증가율이
+높은 영동 지역(강릉·속초·고성·양양 등)에 우선 배치하는 방안을 검토할 수
+있다. 배치 규모 또한 영동의 피해
+배율($e^{\beta \cdot \Delta\text{풍속}}$)을 이용해 예보 풍속에
+비례하도록 설계할 수 있다.
+
+**빈도·심도 정보의 결합 (가설 1 + 가설 2).** 두 분석을 결합하면 '언제
+자주 발생하는가(빈도)'와 '어디서 얼마나 커지는가(심도)'를 함께 고려한
+자원 배분이 가능하다. 예컨대 돌풍·일교차 지수(PC2)가 높아 다발성 위험이
+경고되는 시점에 영동 지역의 강풍 조건이 겹칠 경우, 두 위험이 동시에
+높아지는 상황으로 볼 수 있다. 이를 토대로 기상 주성분 지수와 지역별
+상호작용 기울기를 함께 반영하는 자원 배분 기준을 마련하고, 위험이 높아질
+때 자원을 영동 지역으로 재배치하는 운영 방안으로 확장할 수 있다.
+
+## 3.3 연구의 한계점 및 향후 과제
+
+**인적 요인 데이터의 누락**: 가설 1의 봄철 기저 위험 상승 원인으로
+'인위적 요인'을 지목했으나, 실제 일일 입산객 수, 유동인구, 영농 부산물
+소각 건수 등의 구체적인 인간 행동 데이터를 모델에 직접적인 통제 변수로
+포함하지 못했다. 후속 연구에서 데이터가 보완된다면 인적 위험 요인을
+정량적으로 분리할 수 있을 것이다.
+
+**산림 물리적 환경 변수의 부재**: 화재의 심도(피해액)는 바람뿐만 아니라
+해당 지역의 침엽수림 비율(연소 억제력 차이), 지형의 경사도,
+소방서로부터의 물리적 거리 등에 의해서도 결정된다. 데이터 획득의 한계로
+인해 이러한 공간적/임상적 변수를 다중회귀 모델에 공변인(Covariates)으로
+추가하지 못한 한계가 있다.
+
+**포아송 모델의 과산포(Overdispersion) 가능성**: 화재 건수 데이터의
+특성상 분산이 평균보다 큰 과산포가 존재할 수 있다. 본 연구에서는
+기본적인 포아송 GLM을 적용했으나, 향후 연구에서는 과산포를 교정할 수
+있는 음이항 회귀 모델(Negative Binomial Regression)과의 비교 분석을 통해
+모델의 통계적 정밀도를 검증할 필요가 있다.
+
+------------------------------------------------------------------------
+
+# 4. References and Acknowledgments
+
+- 기상청 기상자료개방포털, 종관기상관측(ASOS) 일자료,
+  <https://data.kma.go.kr>
+- 기상청 강원지방기상청, 한국 지역별 기후특성(속초),
+  <https://www.weather.go.kr/w/climate/statistics/regional-char.do?area=2>
+- 소방청 공공데이터포털(국가화재정보시스템) 화재 발생 자료,
+  <https://www.data.go.kr>
+- 산림청, 2024 산불통계연보,
+  <https://www.forest.go.kr/kfsweb/kfi/kfs/frfr/selectFrfrStats.do>
+- 산림청, 울진·삼척 산불피해지 산림생태복원 기본계획, 2022,
+  <https://nfsv.forest.go.kr/kfs/images/data/down/sb_7_06.pdf>
+- 행정안전부, 2019년 강원도 산불 피해 현황 및 복구 계획, 2019.
+- e-나라지표, 산불 발생 및 피해 현황,
+  <https://www.index.go.kr/unity/potal/main/EachDtlPageDetail.do?idx_cd=1309>
+- IMEN 415 (Spring 2026) Slides: PCA, MLR, GLM.
